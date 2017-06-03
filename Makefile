@@ -1,16 +1,15 @@
 image="pmkr/arch"
 vimg="./tmp/virtual.img"
-mount_dir="/media/tmp"
 
 setup:
 	@(cd docker; docker build -t ${image} .) && \
   ./scripts/make-virtual-image ${vimg}
 
-mount:
-	@mkdir -p ${mount_dir}; mount -t ext4 -o loop ${vimg} ${mount_dir}
+add-loop:
+	@losetup /dev/loop0 ${vimg}
 
-umount:
-	@umount ${mount_dir}; rm -r ${mount_dir}
+rm-loop:
+	@losetup -d /dev/loop0
 
 shell:
 	@docker run -it --rm --net host -v `pwd`:/app --workdir /app --privileged ${image} /bin/bash
