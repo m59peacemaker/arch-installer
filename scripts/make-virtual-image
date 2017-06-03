@@ -1,0 +1,25 @@
+#!/bin/bash
+
+GB=5
+dest="$1"
+
+if [ -z "$dest" ]; then
+  printf "enter an output path for virtual image: "
+  read dest
+fi
+
+if [ -z "$dest" ]; then
+  printf "you are mean\n"
+  exec "$BASH_SOURCE"
+fi
+
+if [ ! -f "$dest" ]; then
+  printf "creating $dest\n"
+
+  mkdir -p `dirname "$dest"` && \
+  dd if=/dev/zero of=./tmp/hdd.img bs=1024 count=`expr 1024 \* 1024 \* $GB` && \
+  mkfs -t ext4 "$dest" && \
+  printf "created $dest"
+else
+  printf "$dest already exists\n"
+fi
