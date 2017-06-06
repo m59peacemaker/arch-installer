@@ -14,4 +14,7 @@ rm-loop:
 shell:
 	@docker run -it --rm --net host -v `pwd`:/app --workdir /app --privileged ${image} /bin/bash
 
+install:
+	@node bin/install
+
 .PHONY: setup mount umount shell
