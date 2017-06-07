@@ -13,7 +13,7 @@ const pifyProc = (p, { collect = true } = {}) => new Promise((resolve, reject) =
   p.on('exit', (code, signal) => (code === 0 ? resolve : reject)({ code, signal, stdout, stderr }))
   // p.on('close', code => (code === 0 ? resolve : reject)({ code, stdout, stderr }))
 })
-const bytesToGB = bytes => bytes / 1000 / 1000 / 1000
+const bytes2 = require('bytes2')
 const GBToBytes = GB => GB * 1000 * 1000 * 1000
 const MBToBytes = MB => MB * 1000 * 1000
 const out = (...args) => process.stdout.write(...args)
@@ -36,61 +36,50 @@ const listDisks = () => execFileAsync('fdisk', [ '--list' ])
     .map(parseDisk)
   )
 
-const formatPartition = partition => pifyProc(
-  spawn('mkfs.ext4', [ partition ], { stdio: 'inherit' })
-)
+const formatPartition = (partition, { force = false }) => {
+  const args = [ partition ]
+  force && args.push('-F')
+  pifyProc(spawn('mkfs.ext4', args, { stdio: 'inherit' }))
+}
 
 const mount = (partition, path) => pifyProc(
   spawn('mount', [ partition, path ], { stdio: 'inherit' })
 )
 
+const wipeDrive = driveName => pifyProc(spawn(
+  'dd',
+  [ 'if=/dev/zero', `of=${driveName}`, 'bs=512', 'count=1' ],
+  { stdio: 'inherit' }
+))
+
 const fdisk = (out, lines, driveName) => {
   const p = spawn('fdisk', [ driveName ])
   p.stdout.on('data', out)
-  const echo = spawn('echo', [ '-e', [ ...lines, 'w' ].join('\n') ])
+  const echo = spawn('echo', [ '-e', lines.join('\n') ])
   echo.stdout.pipe(p.stdin)
   echo.stdout.on('data', out)
-  return pifyProc(p)
+  return Promise.all([pifyProc(p), pifyProc(echo)])
 }
 
-const createPartitionTable = driveName => fdisk(out, [ 'o' ], driveName)
-
-const setPartitionType = ({ driveName, number, typeNumber }) => fdisk(
-  out,
-  [ 't', number, typeNumber ],
-  driveName
-)
-
-const createPartition = ({ driveName, bytes, type, number }) => {
-  let input = [ 'n' ]
-  type && input.push(type.slice(0, 1))
-  input = [
-    ...input,
-    number || '',
-    '',
+const partitionDrive = (drive, swapBytes) => {
+  const offsetBytes = (2048 * 512) * 2 // first sector * sector size * (primary, swap)
+  const primaryBytes = drive.bytes - swapBytes - offsetBytes
+  const primaryKiB = bytes2('KiB', primaryBytes).toFixed(0)
+  const swapKiB = bytes2('KiB', swapBytes).toFixed(0)
+  const input = [
+    'o', // create dos partition table
+    'n', 'p', '1', '', `+${primaryKiB}K`, // new primary partition 1
+    'n', 'e', '2', '', `+${swapKiB}K`, // new extended partition 2
+    'n', '', '', // new partition 5
+    't', '5', '82', // change partition 5 type to swap
+    'w'
   ]
-  bytes && input.push(`+${(bytes) / 1000}K\n`)
-  return fdisk(out, input, driveName)
+  return fdisk(out, input, drive.name)
+    .then(() => {
+      out(`created primary partition of ${bytes2('MB', primaryBytes).toFixed(0)}MB\n`)
+      out(`created swap partition of ${bytes2('MB', swapBytes).toFixed(0)}MB\n\n`)
+    })
 }
-
-const partitionDrive = (drive, swapBytes) => createPartition({
-  driveName: drive.name,
-  type:'primary',
-  number: 1,
-  bytes: drive.bytes - swapBytes
-})
-  .then(() => createPartition({
-    driveName: drive.name,
-    type: 'extended',
-    number: 2,
-    bytes: swapBytes
-  }))
-  .then(() => fdisk(out, [ 'n', '', '' ], drive.name)) // partition 5
-  .then(() => setPartitionType({
-    driveName: drive.name,
-    number: 5,
-    typeNumber: 82
-  }))
 
 const promptDrive = drives => prompt([{
   name: 'drive',
@@ -99,7 +88,7 @@ const promptDrive = drives => prompt([{
   choices: drives.map((drive, idx) => {
     const { name, bytes } = drive
     return {
-      name: `${name} ${bytesToGB(bytes).toFixed(2)}GB`,
+      name: `${name} ${bytes2('GB', bytes).toFixed(2)}GB`,
       value: drive
     }
   })
@@ -143,12 +132,12 @@ const prepareDrive = () => listDisks()
     ? prepareDrive()
     : promptSwapSize(drive).then(swapBytes => ({ drive, swapBytes }))
   )
-  .then(({ drive, swapBytes }) => createPartitionTable(drive.name)
+  .then(({ drive, swapBytes }) => wipeDrive(drive.name)
     .then(() => partitionDrive(drive, swapBytes))
-    //.then(() => formatPartition(drive.name + '1'))
+    .then(() => formatPartition(drive.name + '1', { force: true }))
     // when manually testing, this must be unmounted before running again (device or resource busy)
     // $ umount /mnt
-    //.then(() => mount(drive.name + '1', '/mnt'))
+    .then(() => mount(drive.name + '1', '/mnt'))
   )
 
 module.exports = prepareDrive

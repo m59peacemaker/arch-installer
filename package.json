@@ -11,6 +11,7 @@
   "author": "",
   "license": "CC0-1.0",
   "dependencies": {
+    "bytes2": "^1.0.1",
     "countries-list": "^1.4.1",
     "group-array-by": "^1.0.0",
     "inquirer": "^3.0.6",
