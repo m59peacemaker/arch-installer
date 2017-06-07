@@ -2,8 +2,20 @@ const { execFile, spawn } = require('child_process')
 const pify = require('pify')
 const execFileAsync = pify(execFile, { multiArgs: true })
 const { prompt } = require('inquirer')
+const pifyProc = (p, { collect = true } = {}) => new Promise((resolve, reject) => {
+  if (collect) {
+    var stdout = ''
+    var stderr = ''
+    p.stdout && p.stdout.on('data', data => (stdout += data))
+    p.stderr && p.stderr.on('data', data => (stderr += data))
+  }
+  p.on('error', err => reject({ err }))
+  p.on('exit', (code, signal) => (code === 0 ? resolve : reject)({ code, signal, stdout, stderr }))
+  // p.on('close', code => (code === 0 ? resolve : reject)({ code, stdout, stderr }))
+})
 const bytesToGB = bytes => bytes / 1000 / 1000 / 1000
 const GBToBytes = GB => GB * 1000 * 1000 * 1000
+const MBToBytes = MB => MB * 1000 * 1000
 const out = (...args) => process.stdout.write(...args)
 
 const MIN_DRIVE_GB = 5
@@ -24,39 +36,42 @@ const listDisks = () => execFileAsync('fdisk', [ '--list' ])
     .map(parseDisk)
   )
 
-const formatPartition = partition => new Promise((resolve, reject) => {
-  const p = spawn('mkfs.ext4', [ partition ], { stdio: 'inherit' })
-  p.on('error', reject)
-  p.on('close', code => code === 0 ? resolve() : reject({ code }))
-})
+const formatPartition = partition => pifyProc(
+  spawn('mkfs.ext4', [ partition ], { stdio: 'inherit' })
+)
 
-const mount = (partition, path) => new Promise((resolve, reject) => {
-  const p = spawn('mount', [ partition, path ], { stdio: 'inherit' })
-  p.on('error', reject)
-  p.on('close', code => code === 0 ? resolve() : reject({ code }))
-})
+const mount = (partition, path) => pifyProc(
+  spawn('mount', [ partition, path ], { stdio: 'inherit' })
+)
 
-const createPartitionTable = driveName => new Promise((resolve, reject) => {
+const fdisk = (out, lines, driveName) => {
   const p = spawn('fdisk', [ driveName ])
-  p.on('error', reject)
-  p.on('close', code => code === 0 ? resolve() : reject({ code }))
   p.stdout.on('data', out)
-  p.stdin.write('o\n')
-  p.stdin.write('w\n')
-})
+  const echo = spawn('echo', [ '-e', [ ...lines, 'w' ].join('\n') ])
+  echo.stdout.pipe(p.stdin)
+  echo.stdout.on('data', out)
+  return pifyProc(p)
+}
 
-const createPartition = ({ driveName, bytes, type, number }) => new Promise((resolve, reject) => {
-  const p = spawn('fdisk', [ driveName ])
-  p.on('error', reject)
-  p.on('close', code => code === 0 ? resolve() : reject({ code }))
-  p.stdout.on('data', out)
-  p.stdin.write('n\n')
-  type && p.stdin.write(type.slice(0, 1) + '\n')
-  p.stdin.write((number || '') + '\n')
-  p.stdin.write('\n')
-  p.stdin.write(`+${(bytes) * 1000}K\n`)
-  p.stdin.write('w\n')
-})
+const createPartitionTable = driveName => fdisk(out, [ 'o' ], driveName)
+
+const setPartitionType = ({ driveName, number, typeNumber }) => fdisk(
+  out,
+  [ 't', number, typeNumber ],
+  driveName
+)
+
+const createPartition = ({ driveName, bytes, type, number }) => {
+  let input = [ 'n' ]
+  type && input.push(type.slice(0, 1))
+  input = [
+    ...input,
+    number || '',
+    '',
+  ]
+  bytes && input.push(`+${(bytes) / 1000}K\n`)
+  return fdisk(out, input, driveName)
+}
 
 const partitionDrive = (drive, swapBytes) => createPartition({
   driveName: drive.name,
@@ -64,16 +79,17 @@ const partitionDrive = (drive, swapBytes) => createPartition({
   number: 1,
   bytes: drive.bytes - swapBytes
 })
-  .then(() => createParition({
+  .then(() => createPartition({
     driveName: drive.name,
     type: 'extended',
     number: 2,
     bytes: swapBytes
   }))
-  .then(() => createParition({
+  .then(() => fdisk(out, [ 'n', '', '' ], drive.name)) // partition 5
+  .then(() => setPartitionType({
     driveName: drive.name,
-    type: 'extended',
-    bytes: swapBytes
+    number: 5,
+    typeNumber: 82
   }))
 
 const promptDrive = drives => prompt([{
@@ -106,16 +122,16 @@ const confirmDrive = drive => prompt([{
 }]).then(({ confirmed }) => ({ drive, confirmed }))
 
 const promptSwapSize = () => prompt([{
-  name: 'swapBytes',
-  type: '',
+  name: 'swapMB',
+  type: 'input',
   message: 'Swap partition size (MB)',
   default: 4000
-}]).then(({ swapBytes }) => {
-  if (typeof parseInt(swapBytes) !== 'number') {
-    out(`${swapBytes} is not a number. You must enter a number`)
+}]).then(({ swapMB }) => {
+  if (typeof parseInt(swapMB) !== 'number') {
+    out(`${swapMB} is not a number. You must enter a number`)
     return promptSwapSize()
   } else {
-    return swapBytes
+    return MBToBytes(swapMB)
   }
 })
 
@@ -129,8 +145,10 @@ const prepareDrive = () => listDisks()
   )
   .then(({ drive, swapBytes }) => createPartitionTable(drive.name)
     .then(() => partitionDrive(drive, swapBytes))
-    .then(() => formatPartition(drive.name + '1'))
-    .then(() => mount(drive.name + '1', '/mnt'))
+    //.then(() => formatPartition(drive.name + '1'))
+    // when manually testing, this must be unmounted before running again (device or resource busy)
+    // $ umount /mnt
+    //.then(() => mount(drive.name + '1', '/mnt'))
   )
 
 module.exports = prepareDrive
