@@ -1,18 +1,13 @@
-const { execFile, spawn } = require('child_process')
+const { spawn } = require('child_process')
 const pify = require('pify')
-const execFileAsync = pify(execFile, { multiArgs: true })
 const { prompt } = require('inquirer')
-const pifyProc = (p, { collect = true } = {}) => new Promise((resolve, reject) => {
-  if (collect) {
-    var stdout = ''
-    var stderr = ''
-    p.stdout && p.stdout.on('data', data => (stdout += data))
-    p.stderr && p.stderr.on('data', data => (stderr += data))
-  }
-  p.on('error', err => reject({ err }))
-  p.on('exit', (code, signal) => (code === 0 ? resolve : reject)({ code, signal, stdout, stderr }))
-  // p.on('close', code => (code === 0 ? resolve : reject)({ code, stdout, stderr }))
-})
+const pifyProc = require('../../lib/pify-proc')
+const disksInfo = require('./disks-info')
+const formatPartition = require('./format-partition')
+const wipeDrive = require('./wipe-drive')
+const fdisk = require('../../lib/fdisk')
+
+// TODO: better lib to convert to/from all these
 const bytes2 = require('bytes2')
 const GBToBytes = GB => GB * 1000 * 1000 * 1000
 const MBToBytes = MB => MB * 1000 * 1000
@@ -21,45 +16,9 @@ const out = (...args) => process.stdout.write(...args)
 const MIN_DRIVE_GB = 5
 const MIN_DRIVE_BYTES = GBToBytes(MIN_DRIVE_GB)
 
-const parseDisk = string => {
-  const matches = string.match(/^Disk ([^:]+): \d+ \w+, (\d+) bytes, /)
-  return {
-    name: matches[1],
-    bytes: Number(matches[2])
-  }
-}
-
-const listDisks = () => execFileAsync('fdisk', [ '--list' ])
-  .then(([ stdout ]) => stdout
-    .split(/\n{2,}/)
-    .filter(v => /^Disk /.test(v))
-    .map(parseDisk)
-  )
-
-const formatPartition = (partition, { force = false }) => {
-  const args = [ partition ]
-  force && args.push('-F')
-  pifyProc(spawn('mkfs.ext4', args, { stdio: 'inherit' }))
-}
-
 const mount = (partition, path) => pifyProc(
   spawn('mount', [ partition, path ], { stdio: 'inherit' })
 )
-
-const wipeDrive = driveName => pifyProc(spawn(
-  'dd',
-  [ 'if=/dev/zero', `of=${driveName}`, 'bs=512', 'count=1' ],
-  { stdio: 'inherit' }
-))
-
-const fdisk = (out, lines, driveName) => {
-  const p = spawn('fdisk', [ driveName ])
-  p.stdout.on('data', out)
-  const echo = spawn('echo', [ '-e', lines.join('\n') ])
-  echo.stdout.pipe(p.stdin)
-  echo.stdout.on('data', out)
-  return Promise.all([pifyProc(p), pifyProc(echo)])
-}
 
 const partitionDrive = (drive, swapBytes) => {
   const offsetBytes = (2048 * 512) * 2 // first sector * sector size * (primary, swap)
@@ -124,7 +83,7 @@ const promptSwapSize = () => prompt([{
   }
 })
 
-const prepareDrive = () => listDisks()
+const prepareDrive = () => disksInfo()
   .then(promptDrive)
   .then(validateDrive)
   .then(confirmDrive)
