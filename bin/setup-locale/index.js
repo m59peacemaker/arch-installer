@@ -16,6 +16,7 @@ const {
   pick,
   pipe,
   prop,
+  sortBy,
   values
 } = require('ramda')
 const countriesList = require('countries-list').countries
@@ -39,9 +40,9 @@ const localeGen = () => new Promise((resolve, reject) => {
 */
 const setLanguage = lang => {
   const confValue = `LANG=${lang}`
-  out(`setting "${confValue}" in ${LOCALE_CONF_PATH}... `)
+  out(`Setting "${confValue}" in ${LOCALE_CONF_PATH}... `)
   return writeFileAsync(LOCALE_CONF_PATH, confValue + '\n')
-    .then(() => out('done.\n'))
+    .then(() => out('done\n'))
 }
 
 const promptLanguage = () => {
@@ -101,7 +102,7 @@ const setupLocale = () => promptLanguage()
     const charset = 'UTF-8'
     const lang = `${languageCode}_${countryCode}.${charset}`
     const locale = `${lang} ${charset}`
-    out(`writing ${locale} to ${LOCALE_FILE_PATH}... `)
+    out(`Writing "${locale}" to ${LOCALE_FILE_PATH}... `)
     return writeFileAsync(LOCALE_FILE_PATH, locale)
       .then(() => out('done\n'))
       .then(localeGen)
