@@ -1,10 +1,15 @@
 const prepareDisk = require('./prepare-disk')
 const setupLocale = require('./setup-locale')
 const enableTimeSync = require('./enable-time-sync')
+const fstab = require('./fstab')
+const pifyProc = require('../lib/pify-proc')
+const { spawn } = require('child_process')
 
 setupLocale()
   .then(enableTimeSync)
   .then(prepareDisk)
+  .then(() => fstab('/mnt', '/mnt/etc/fstab'))
+  .then(() => pifyProc(spawn('arch-chroot', [ '/mnt' ], { stdio: 'inherit' })))
   .catch(err => {
     console.error(err.message || err.err || err.stderr)
     err.code && process.exit(err.code)
