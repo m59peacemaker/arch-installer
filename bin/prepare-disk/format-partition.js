@@ -1,3 +1,5 @@
+const { spawn } = require('child_process')
+const pifyProc = require('../../lib/pify-proc')
 // TODO: make/use a general mkfs JS API
 
 const formatPartition = (partition, { type = 'ext4', force = false }) => {
